@@ -74,6 +74,26 @@ uint32_t Socket::GetRemoteIP() const
   return ntohl(addr.sin_addr.s_addr);
 }
 
+bool Socket::ConnectedAndValid() const
+{
+  if(!Connected())
+    return false;
+
+  int optVal = 10;
+  int optLen = sizeof(int);
+
+  int ret = getsockopt((SOCKET)socket, SOL_SOCKET, SO_ACCEPTCONN, (char *)&optVal, &optLen);
+
+  if(ret != 0)
+  {
+    int err = WSAGetLastError();
+    RDCLOG("getsockopt returned %i, error %i", ret, err);
+    return false;
+  }
+
+  return true;
+}
+
 Socket *Socket::AcceptClient(bool wait)
 {
   do

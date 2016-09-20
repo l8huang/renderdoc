@@ -267,17 +267,24 @@ void RenderDoc::Initialise()
         break;
       }
 
+      RDCLOG("Trying to create server socket on %u", port);
+
       sock = Network::CreateServerSocket("0.0.0.0", port & 0xffff, 4);
+
+      RDCLOG("Created socket on %u, connected and valid %d", port, sock->ConnectedAndValid() ? 1 : 0);
     }
 
     if(sock)
     {
       m_RemoteIdent = port;
 
+      RDCLOG("Got a socket on %u, connected and valid %d", port, sock->ConnectedAndValid() ? 1 : 0);
+
       m_TargetControlThreadShutdown = false;
       m_RemoteThread = Threading::CreateThread(TargetControlServerThread, (void *)sock);
 
-      RDCLOG("Listening for target control on %u", port);
+      RDCLOG("Listening for target control on %u, connected and valid %d", port,
+             sock->ConnectedAndValid() ? 1 : 0);
     }
     else
     {

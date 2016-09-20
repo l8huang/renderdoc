@@ -245,21 +245,46 @@ void RenderDoc::TargetControlServerThread(void *s)
 
   Network::Socket *sock = (Network::Socket *)s;
 
+  RDCLOG("Starting TargetControlServerThread with socket, connected and valid %d",
+         sock->ConnectedAndValid() ? 1 : 0);
+
   RenderDoc::Inst().m_SingleClientName = "";
 
   Threading::ThreadHandle clientThread = 0;
 
   RenderDoc::Inst().m_ControlClientThreadShutdown = false;
 
+  int iter = 0;
+
   while(!RenderDoc::Inst().m_TargetControlThreadShutdown)
   {
+    iter++;
+
+    if(!sock->ConnectedAndValid())
+    {
+      RDCLOG("Before accept - socket is not connected or not valid at iter %d", iter);
+
+      SAFE_DELETE(sock);
+      Threading::ReleaseModuleExitThread();
+      return;
+    }
+
     Network::Socket *client = sock->AcceptClient(false);
+
+    if(!sock->ConnectedAndValid())
+    {
+      RDCLOG("After accept - socket is not connected or not valid at iter %d", iter);
+
+      SAFE_DELETE(sock);
+      Threading::ReleaseModuleExitThread();
+      return;
+    }
 
     if(client == NULL)
     {
       if(!sock->Connected())
       {
-        RDCERR("Error in accept - shutting down server");
+        RDCERR("Error in accept - shutting down server, iter %d", iter);
 
         SAFE_DELETE(sock);
         Threading::ReleaseModuleExitThread();

@@ -154,6 +154,8 @@ public:
 
   Socket *AcceptClient(bool wait);
 
+  bool ConnectedAndValid() const;
+
   uint32_t GetRemoteIP() const;
 
   bool IsRecvDataWaiting();

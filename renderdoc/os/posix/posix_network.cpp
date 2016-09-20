@@ -69,6 +69,11 @@ bool Socket::Connected() const
   return (int)socket != -1;
 }
 
+bool Socket::ConnectedAndValid() const
+{
+  return Connected();
+}
+
 uint32_t Socket::GetRemoteIP() const
 {
   sockaddr_in addr = {};
