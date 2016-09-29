@@ -290,7 +290,8 @@ bool ReplayOutput::PickPixel(ResourceId tex, bool customShader, uint32_t x, uint
     typeHint = eCompType_None;
   }
   if((m_RenderData.texDisplay.overlay == eTexOverlay_QuadOverdrawDraw ||
-      m_RenderData.texDisplay.overlay == eTexOverlay_QuadOverdrawPass) &&
+      m_RenderData.texDisplay.overlay == eTexOverlay_QuadOverdrawPass ||
+      m_RenderData.texDisplay.overlay == eTexOverlay_TriangleSize) &&
      m_OverlayResourceId != ResourceId())
   {
     decodeRamp = true;
@@ -315,6 +316,20 @@ bool ReplayOutput::PickPixel(ResourceId tex, bool customShader, uint32_t x, uint
         ret->value_i[3] = 0;
         break;
       }
+    }
+
+    // decode back into approximate pixel size area
+    if(m_RenderData.texDisplay.overlay == eTexOverlay_TriangleSize)
+    {
+      float bucket = (float)ret->value_i[0];
+
+      // decode bucket into approximate triangle area
+      if(bucket <= 0.5f)
+        ret->value_f[0] = 0.0f;
+      else if(bucket < 2.0f)
+        ret->value_f[0] = 16.0f;
+      else
+        ret->value_f[0] = -2.5f * logf(1.0f + (bucket - 22.0f) / 20.1f);
     }
   }
 
@@ -388,7 +403,8 @@ void ReplayOutput::DisplayContext()
     disp.texid = m_CustomShaderResourceId;
 
   if((m_RenderData.texDisplay.overlay == eTexOverlay_QuadOverdrawDraw ||
-      m_RenderData.texDisplay.overlay == eTexOverlay_QuadOverdrawPass) &&
+      m_RenderData.texDisplay.overlay == eTexOverlay_QuadOverdrawPass ||
+      m_RenderData.texDisplay.overlay == eTexOverlay_TriangleSize) &&
      m_OverlayResourceId != ResourceId())
     disp.texid = m_OverlayResourceId;
 

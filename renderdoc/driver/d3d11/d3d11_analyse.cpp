@@ -3178,6 +3178,9 @@ ResourceId D3D11DebugManager::RenderOverlay(ResourceId texid, FormatComponentTyp
                                             TextureDisplayOverlay overlay, uint32_t eventID,
                                             const vector<uint32_t> &passEvents)
 {
+  if(overlay == eTexOverlay_TriangleSize)
+    InitPostVSBuffers(eventID);
+
   TextureShaderDetails details = GetShaderDetails(texid, typeHint, false);
 
   ResourceId id = texid;
@@ -3722,6 +3725,188 @@ ResourceId D3D11DebugManager::RenderOverlay(ResourceId texid, FormatComponentTyp
             m_WrappedDevice->ReplayLog(events[i], events[i + 1], eReplay_WithoutDraw);
         }
       }
+    }
+  }
+  else if(overlay == eTexOverlay_TriangleSize)
+  {
+    MeshFormat fmt = GetPostVSBuffers(eventID, 0, eMeshDataStage_GSOut);
+    if(fmt.buf == ResourceId())
+      fmt = GetPostVSBuffers(eventID, 0, eMeshDataStage_VSOut);
+
+    if(fmt.buf != ResourceId())
+    {
+      SCOPED_TIMER("Triangle size");
+
+      DebugPixelCBufferData pixelData = {};
+
+      pixelData.OutputDisplayFormat = MESHDISPLAY_SOLID;
+      pixelData.WireframeColour = Vec3f(1.0f, 1.0f, 0.0f);
+
+      FillCBuffer(m_DebugRender.GenericPSCBuffer, &pixelData, sizeof(DebugPixelCBufferData));
+
+      // ensure it will be recreated on next use
+      SAFE_RELEASE(m_MeshDisplayLayout);
+      m_PrevMeshFmt = ResourceFormat();
+
+      ResourceFormat meshfmt;
+      meshfmt.compByteWidth = fmt.compByteWidth;
+      meshfmt.compType = fmt.compType;
+      meshfmt.compCount = fmt.compCount;
+      meshfmt.special = false;
+
+      D3D11_INPUT_ELEMENT_DESC layoutdesc[2];
+
+      layoutdesc[0].SemanticName = "pos";
+      layoutdesc[0].SemanticIndex = 0;
+      layoutdesc[0].Format = MakeDXGIFormat(meshfmt);
+      layoutdesc[0].AlignedByteOffset = 0;    // offset will be handled by vertex buffer offset
+      layoutdesc[0].InputSlot = 0;
+      layoutdesc[0].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA;
+      layoutdesc[0].InstanceDataStepRate = 0;
+
+      // dummy for vertex shader
+      layoutdesc[1].SemanticName = "sec";
+      layoutdesc[1].SemanticIndex = 0;
+      layoutdesc[1].Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+      layoutdesc[1].AlignedByteOffset = 0;
+      layoutdesc[1].InputSlot = 1;
+      layoutdesc[1].InputSlotClass = D3D11_INPUT_PER_INSTANCE_DATA;
+      layoutdesc[1].InstanceDataStepRate = 0;
+
+      HRESULT hr =
+          m_pDevice->CreateInputLayout(layoutdesc, 2, m_DebugRender.MeshHomogVSBytecode,
+                                       m_DebugRender.MeshHomogVSBytelen, &m_MeshDisplayLayout);
+
+      if(FAILED(hr))
+      {
+        RDCERR("Failed to create m_MeshDisplayLayout %08x", hr);
+        m_MeshDisplayLayout = NULL;
+      }
+
+      D3D11_PRIMITIVE_TOPOLOGY topo = MakeD3DPrimitiveTopology(fmt.topo);
+
+      DebugVertexCBuffer vertexData = {};
+      vertexData.LineStrip = 0;
+      vertexData.ModelViewProj = Matrix4f::Identity();
+      vertexData.SpriteSize = Vec2f();
+
+      FillCBuffer(m_DebugRender.GenericVSCBuffer, &vertexData, sizeof(DebugVertexCBuffer));
+
+      ID3D11Buffer *ibuf = NULL;
+      DXGI_FORMAT ifmt = DXGI_FORMAT_R16_UINT;
+      UINT ioffs = (UINT)fmt.idxoffs;
+
+      ID3D11Buffer *vbs[2] = {NULL, NULL};
+      UINT str[2] = {fmt.stride, 4};
+      UINT offs[2] = {(UINT)fmt.offset, 0};
+
+      {
+        auto it = WrappedID3D11Buffer::m_BufferList.find(fmt.buf);
+
+        if(it != WrappedID3D11Buffer::m_BufferList.end())
+          vbs[0] = UNWRAP(WrappedID3D11Buffer, it->second.m_Buffer);
+
+        it = WrappedID3D11Buffer::m_BufferList.find(fmt.idxbuf);
+
+        if(it != WrappedID3D11Buffer::m_BufferList.end())
+          ibuf = UNWRAP(WrappedID3D11Buffer, it->second.m_Buffer);
+
+        if(fmt.idxByteWidth == 4)
+          ifmt = DXGI_FORMAT_R32_UINT;
+      }
+
+      m_pImmediateContext->IASetInputLayout(m_MeshDisplayLayout);
+
+      m_pImmediateContext->IASetVertexBuffers(0, 1, vbs, str, offs);
+      if(ibuf)
+        m_pImmediateContext->IASetIndexBuffer(ibuf, ifmt, ioffs);
+      else
+        m_pImmediateContext->IASetIndexBuffer(NULL, DXGI_FORMAT_UNKNOWN, NULL);
+
+      m_pImmediateContext->IASetPrimitiveTopology(topo);
+
+      m_pImmediateContext->VSSetConstantBuffers(0, 1, &m_DebugRender.GenericVSCBuffer);
+      m_pImmediateContext->PSSetConstantBuffers(1, 1, &m_DebugRender.GenericPSCBuffer);
+
+      ID3D11Buffer *buf = MakeCBuffer(&overdrawRamp[0].x, sizeof(overdrawRamp));
+      m_pImmediateContext->PSSetConstantBuffers(0, 1, &buf);
+
+      UINT dummy = 1;
+      D3D11_VIEWPORT views[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE] = {0};
+      m_pImmediateContext->RSGetViewports(&dummy, views);
+
+      Vec4f viewport = Vec4f(views[0].Width, views[0].Height);
+
+      buf = MakeCBuffer(&viewport.x, sizeof(viewport));
+      m_pImmediateContext->GSSetConstantBuffers(0, 1, &buf);
+
+      m_pImmediateContext->VSSetShader(m_DebugRender.WireframeHomogVS, NULL, 0);
+      m_pImmediateContext->GSSetShader(m_DebugRender.TriangleSizeGS, NULL, 0);
+      m_pImmediateContext->PSSetShader(m_DebugRender.TriangleSizePS, NULL, 0);
+
+      m_pImmediateContext->HSSetShader(NULL, NULL, 0);
+      m_pImmediateContext->DSSetShader(NULL, NULL, 0);
+
+      dsDesc.DepthEnable = FALSE;
+
+      ID3D11DepthStencilState *os = NULL;
+      hr = m_pDevice->CreateDepthStencilState(&dsDesc, &os);
+      if(FAILED(hr))
+      {
+        RDCERR("Failed to create wireframe depth state %08x", hr);
+        return m_OverlayResourceId;
+      }
+
+      m_pImmediateContext->OMSetBlendState(NULL, NULL, 0xffffffff);
+
+      ID3D11RasterizerState *rs = NULL;
+      {
+        D3D11_RASTERIZER_DESC rdesc;
+
+        m_pImmediateContext->RSGetState(&rs);
+
+        if(rs)
+        {
+          rs->GetDesc(&rdesc);
+        }
+        else
+        {
+          rdesc.FillMode = D3D11_FILL_SOLID;
+          rdesc.CullMode = D3D11_CULL_BACK;
+          rdesc.FrontCounterClockwise = FALSE;
+          rdesc.DepthBias = D3D11_DEFAULT_DEPTH_BIAS;
+          rdesc.DepthBiasClamp = D3D11_DEFAULT_DEPTH_BIAS_CLAMP;
+          rdesc.SlopeScaledDepthBias = D3D11_DEFAULT_SLOPE_SCALED_DEPTH_BIAS;
+          rdesc.DepthClipEnable = TRUE;
+          rdesc.ScissorEnable = FALSE;
+          rdesc.MultisampleEnable = FALSE;
+          rdesc.AntialiasedLineEnable = FALSE;
+        }
+
+        SAFE_RELEASE(rs);
+
+        rdesc.FillMode = D3D11_FILL_SOLID;
+
+        hr = m_pDevice->CreateRasterizerState(&rdesc, &rs);
+        if(FAILED(hr))
+        {
+          RDCERR("Failed to create wireframe rast state %08x", hr);
+          return m_OverlayResourceId;
+        }
+      }
+
+      float overlayConsts[] = {0.0f, 0.0f, 0.0f, 0.0f};
+      m_pImmediateContext->ClearRenderTargetView(rtv, overlayConsts);
+
+      m_pImmediateContext->RSSetState(rs);
+
+      if(ibuf)
+        m_pImmediateContext->DrawIndexed(fmt.numVerts, 0, fmt.baseVertex);
+      else
+        m_pImmediateContext->Draw(fmt.numVerts, 0);
+
+      SAFE_RELEASE(os);
+      SAFE_RELEASE(rs);
     }
   }
   else if(overlay == eTexOverlay_QuadOverdrawPass || overlay == eTexOverlay_QuadOverdrawDraw)
